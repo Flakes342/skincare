@@ -25,6 +25,10 @@ python scraper.py \
 - `data/product_images/*`: downloaded product images
 
 ### Notes
+- Blocked URLs are recorded in `data/blocked_by_robots.csv` (configurable via `--blocked-log-csv`).
+- End-of-run summary prints counts for `ok`, `blocked`, and `errors`.
+
+### Notes
 - This script is designed for compliant scraping and respects `robots.txt` by default.
 - If a URL is blocked by robots policy, it is skipped and logged.
 

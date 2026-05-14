@@ -154,6 +154,7 @@ def main():
     ap.add_argument('--delay', type=float, default=2.0); ap.add_argument('--jitter', type=float, default=3.0)
     ap.add_argument('--timeout', type=int, default=45); ap.add_argument('--retries', type=int, default=6)
     ap.add_argument('--limit', type=int, default=0); ap.add_argument('--ignore-robots', action='store_true')
+    ap.add_argument('--blocked-log-csv', default='data/blocked_by_robots.csv')
     ap.add_argument('urls', nargs='*')
     a=ap.parse_args()
 
@@ -169,9 +170,14 @@ def main():
     products_csv=Path(a.out_products_csv); ingredients_csv=Path(a.out_ingredients_csv)
 
     new_products=not products_csv.exists()
-    with out_jsonl.open('a',encoding='utf-8') as jf, products_csv.open('a', newline='', encoding='utf-8') as pf:
-        pw=csv.writer(pf)
+    blocked_csv=Path(a.blocked_log_csv)
+    blocked_csv.parent.mkdir(parents=True, exist_ok=True)
+    new_blocked=not blocked_csv.exists()
+    ok_count=0; blocked_count=0; err_count=0
+    with out_jsonl.open('a',encoding='utf-8') as jf, products_csv.open('a', newline='', encoding='utf-8') as pf, blocked_csv.open('a', newline='', encoding='utf-8') as bf:
+        pw=csv.writer(pf); bw=csv.writer(bf)
         if new_products: pw.writerow(['url','name','brand','image_url','image_path','raw_html_path'])
+        if new_blocked: bw.writerow(['url','reason'])
         for i,url in enumerate(urls,start=1):
             try:
                 html=sess.get(url,obey_robots=not a.ignore_robots).text
@@ -182,10 +188,17 @@ def main():
                 jf.write(json.dumps(rec,ensure_ascii=False)+'\n')
                 pw.writerow([rec['url'],rec.get('name'),rec.get('brand'),rec.get('image_url'),rec.get('image_path'),rec['raw_html_path']])
                 append_ingredient_rows(ingredients_csv, rec)
+                ok_count += 1
                 print(f"OK [{i}/{len(urls)}] {rec.get('name') or 'Unknown'} | skim={len(rec.get('skim_table') or [])} | explained={len(rec.get('ingredients_explained') or [])}")
             except PermissionError as e:
-                print(f"SKIP robots block: {e}")
+                blocked_count += 1
+                bw.writerow([url, str(e)])
+                print(f"SKIP robots block: {url}")
             except Exception as e:
+                err_count += 1
                 print(f"ERR {url} -> {e}")
+
+    print(f"DONE total={len(urls)} ok={ok_count} blocked={blocked_count} errors={err_count}")
+    print(f"Blocked URLs saved to: {blocked_csv}")
 
 if __name__=='__main__': main()
