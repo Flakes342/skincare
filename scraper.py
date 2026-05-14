@@ -80,19 +80,26 @@ def _txt(n): return n.get_text(' ', strip=True) if n else None
 
 def parse_incidecoder(url: str, html: str) -> ProductRecord:
     soup = BeautifulSoup(html, 'html.parser')
-    name = _txt(soup.select_one('h1'))
-    brand = _txt(soup.select_one('h1 + .fs21, .fs21'))
+    name = ' '.join((_txt(soup.select_one("h1")) or '').split())
+    brand = _txt(soup.select_one("a[href*='/brands/']"))
     overview = [_txt(a) for a in soup.select('div.ingredinfobox a, .mt16 a') if _txt(a)]
 
     skim=[]
-    for tr in soup.select('table.product-skim tr'):
-        tds=[_txt(td) or '' for td in tr.select('td,th')]
-        if len(tds)>=2: skim.append({'attribute':tds[0],'value':tds[1]})
+    table = soup.select_one('table.product-skim')
+    headers = ['Ingredient name', 'what-it-does', 'irr., com.', 'ID-Rating']
+    if table:
+        head_cells = [_txt(x) or '' for x in table.select('tr th')]
+        if len(head_cells) >= 4:
+            headers = head_cells[:4]
+        for tr in table.select('tr'):
+            tds=[_txt(td) or '' for td in tr.select('td')]
+            if len(tds) >= 4:
+                skim.append({headers[0]: tds[0], headers[1]: tds[1], headers[2]: tds[2], headers[3]: tds[3]})
 
     explained=[]
-    container=soup.select_one('#ingredients-explained')
+    container=soup.select_one('#ingredients-explained, .ingredlist-long')
     if container:
-        for h in container.select('h3, h4'):
+        for h in container.select('h3, h4, .ingredient-name'):
             desc=[]; nxt=h.find_next_sibling()
             while nxt and nxt.name not in ('h3','h4'):
                 if nxt.name=='p': desc.append(_txt(nxt) or '')
@@ -144,7 +151,7 @@ def main():
                 raw=save_raw(Path(a.raw_dir),url,html)
                 rec=asdict(pick_parser(url)(url,html)); rec['raw_html_path']=str(raw)
                 f.write(json.dumps(rec,ensure_ascii=False)+'\n')
-                print(f"OK [{i}/{len(urls)}] {rec.get('name') or 'Unknown'} | brand={rec.get('brand')} | ingredients={len(rec.get('ingredients_overview') or [])} | explained={len(rec.get('ingredients_explained') or [])}")
+                print(f"OK [{i}/{len(urls)}] {rec.get('name') or 'Unknown'} | brand={rec.get('brand')} | skim_rows={len(rec.get('skim_table') or [])} | explained={len(rec.get('ingredients_explained') or [])}")
             except Exception as e:
                 print('ERR',url,'->',e)
 
