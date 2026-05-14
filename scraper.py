@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, hashlib, json, re, time
+import argparse, hashlib, json, random, re, time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 import requests
 from bs4 import BeautifulSoup
 
-USER_AGENT = "SkincareResearchBot/0.2 (+contact: you@example.com)"
+USER_AGENT = "SkincareResearchBot/0.3 (+contact: you@example.com)"
 HEADERS = {"User-Agent": USER_AGENT}
 
 @dataclass
@@ -18,33 +18,49 @@ class ProductRecord:
     url: str
     name: str | None = None
     brand: str | None = None
-    category: str | None = None
     ingredients_overview: list[str] | None = None
     highlights: dict[str, list[str]] | None = None
     skim_table: list[dict[str, str]] | None = None
     ingredients_explained: list[dict[str, str]] | None = None
-    concerns: list[str] | None = None
-    usage: str | None = None
     extra: dict | None = None
 
 class SafeSession:
-    def __init__(self, delay_seconds: float = 1.0, timeout_seconds: int = 30):
+    def __init__(self, delay_seconds: float = 1.0, jitter_seconds: float = 2.0, timeout_seconds: int = 30, max_retries: int = 4):
         self.s = requests.Session(); self.s.headers.update(HEADERS)
-        self.delay = delay_seconds; self.timeout = timeout_seconds; self.last = 0.0; self.robots={}
+        self.delay = delay_seconds; self.jitter = jitter_seconds; self.timeout = timeout_seconds; self.max_retries = max_retries
+        self.last = 0.0; self.robots={}
+
     def _sleep(self):
-        d=time.time()-self.last
-        if d<self.delay: time.sleep(self.delay-d)
+        min_wait = max(0.0, self.delay - (time.time() - self.last))
+        jitter = random.uniform(0, self.jitter) if self.jitter > 0 else 0
+        time.sleep(min_wait + jitter)
+
     def _rp(self, base: str):
         if base in self.robots: return self.robots[base]
         rp=RobotFileParser(); rp.set_url(urljoin(base,'/robots.txt'))
         try: rp.read()
         except Exception: pass
         self.robots[base]=rp; return rp
+
     def get(self, url:str, obey_robots=True):
         p=urlparse(url); base=f"{p.scheme}://{p.netloc}"
         if obey_robots and not self._rp(base).can_fetch(USER_AGENT,url):
             raise PermissionError(f"Blocked by robots.txt: {url}")
-        self._sleep(); r=self.s.get(url,timeout=self.timeout); self.last=time.time(); r.raise_for_status(); return r
+
+        last_err = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                self._sleep()
+                r=self.s.get(url,timeout=self.timeout)
+                self.last=time.time()
+                r.raise_for_status()
+                return r
+            except requests.RequestException as e:
+                last_err = e
+                backoff = min(20, (2 ** (attempt - 1)) + random.uniform(0.2, 1.5))
+                print(f"WARN request failed ({attempt}/{self.max_retries}) {url}: {e}. retrying in {backoff:.1f}s")
+                time.sleep(backoff)
+        raise last_err
 
 def parse_sitemap_xml(xml_text: str) -> list[str]:
     root = ET.fromstring(xml_text)
@@ -68,13 +84,6 @@ def parse_incidecoder(url: str, html: str) -> ProductRecord:
     brand = _txt(soup.select_one('h1 + .fs21, .fs21'))
     overview = [_txt(a) for a in soup.select('div.ingredinfobox a, .mt16 a') if _txt(a)]
 
-    highlights = {}
-    for section in ['Key ingredients','Acne-Fighting','Antioxidant','Cell-communicating ingredient','Exfoliant','Skin brightening','Soothing']:
-        node = soup.find(string=re.compile(rf'^{re.escape(section)}', re.I))
-        if node and node.parent:
-            vals = [t.strip() for t in re.split(r',\s*', node.parent.get_text(' ', strip=True).split(':',1)[-1]) if t.strip()]
-            if vals: highlights[section]=vals
-
     skim=[]
     for tr in soup.select('table.product-skim tr'):
         tds=[_txt(td) or '' for td in tr.select('td,th')]
@@ -91,14 +100,13 @@ def parse_incidecoder(url: str, html: str) -> ProductRecord:
             explained.append({'ingredient':_txt(h) or '', 'description':' '.join(desc).strip()})
 
     return ProductRecord(source='incidecoder',url=url,name=name,brand=brand,
-        ingredients_overview=overview or None, highlights=highlights or None,
+        ingredients_overview=overview or None,
         skim_table=skim or None, ingredients_explained=explained or None,
         extra={'title': _txt(soup.title), 'show_more_hint': bool(soup.select_one('div.showmore-link'))})
 
 def pick_parser(url:str):
-    h=urlparse(url).netloc.lower()
-    if 'incidecoder.com' in h: return parse_incidecoder
-    raise ValueError(f'No parser for host: {h}')
+    if 'incidecoder.com' in urlparse(url).netloc.lower(): return parse_incidecoder
+    raise ValueError(f'No parser for host: {url}')
 
 def save_raw(output_dir: Path, url: str, html: str) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -109,22 +117,34 @@ def main():
     ap.add_argument('urls', nargs='*')
     ap.add_argument('--discover-incidecoder', action='store_true')
     ap.add_argument('--discover-limit', type=int, default=0)
+    ap.add_argument('--test-url', default='https://incidecoder.com/products/niod-non-acid-acid-precursor-15')
+    ap.add_argument('--run-test', action='store_true', help='Scrape only test URL and print parsed JSON preview')
     ap.add_argument('--out', default='data/products.jsonl'); ap.add_argument('--raw-dir', default='data/raw_html')
-    ap.add_argument('--delay', type=float, default=1.0); ap.add_argument('--ignore-robots', action='store_true')
-    a=ap.parse_args(); sess=SafeSession(delay_seconds=a.delay)
+    ap.add_argument('--delay', type=float, default=1.0); ap.add_argument('--jitter', type=float, default=2.0)
+    ap.add_argument('--timeout', type=int, default=30); ap.add_argument('--retries', type=int, default=4)
+    ap.add_argument('--ignore-robots', action='store_true')
+    a=ap.parse_args(); sess=SafeSession(a.delay, a.jitter, a.timeout, a.retries)
+
+    if a.run_test:
+        html=sess.get(a.test_url, obey_robots=not a.ignore_robots).text
+        rec=asdict(parse_incidecoder(a.test_url, html))
+        print(json.dumps(rec, ensure_ascii=False, indent=2)[:8000])
+        return
+
     urls=list(a.urls)
     if a.discover_incidecoder:
         urls.extend(discover_incidecoder_product_urls(sess, obey_robots=not a.ignore_robots))
-    urls=sorted(set(urls));
+    urls=sorted(set(urls))
     if a.discover_limit>0: urls=urls[:a.discover_limit]
     out=Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     with out.open('a',encoding='utf-8') as f:
-        for url in urls:
+        for i, url in enumerate(urls, start=1):
             try:
                 html=sess.get(url, obey_robots=not a.ignore_robots).text
                 raw=save_raw(Path(a.raw_dir),url,html)
                 rec=asdict(pick_parser(url)(url,html)); rec['raw_html_path']=str(raw)
-                f.write(json.dumps(rec,ensure_ascii=False)+'\n'); print('OK ',url)
+                f.write(json.dumps(rec,ensure_ascii=False)+'\n')
+                print(f"OK [{i}/{len(urls)}] {rec.get('name') or 'Unknown'} | brand={rec.get('brand')} | ingredients={len(rec.get('ingredients_overview') or [])} | explained={len(rec.get('ingredients_explained') or [])}")
             except Exception as e:
                 print('ERR',url,'->',e)
 

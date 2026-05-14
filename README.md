@@ -1,33 +1,27 @@
 ## Incidecoder scraper
 
-This version focuses on Incidecoder product pages and supports sitemap-based URL discovery.
-
 ### Install
-
 ```bash
 pip install -r requirements.txt
 ```
 
-### Discover + scrape products
-
+### Test one product (preview parsed JSON)
 ```bash
-python scraper.py --discover-incidecoder --discover-limit 100 --delay 1.5
+python scraper.py --run-test
 ```
 
-### Scrape specific product URLs
-
+### Discover + scrape with random delay/jitter and retries
 ```bash
-python scraper.py "https://incidecoder.com/products/niod-non-acid-acid-precursor-15"
+python scraper.py --discover-incidecoder --discover-limit 100 --delay 1.0 --jitter 2.0 --timeout 30 --retries 4
 ```
+
+### Logging
+Each scraped product logs progress and key counts:
+- product name
+- brand
+- number of overview ingredients
+- number of ingredients explained entries
 
 ### Output
-
 - JSONL: `data/products.jsonl`
 - Raw HTML snapshots: `data/raw_html/*.html`
-
-The parser extracts:
-- product name + brand
-- ingredients overview
-- highlights
-- **skim table**
-- **ingredients explained section** (expanded content present in page HTML)
