@@ -1,30 +1,27 @@
-## Incidecoder scraper
+## Incidecoder scraper (CSV pipeline)
 
 ### Install
 ```bash
 pip install -r requirements.txt
 ```
 
-### Test one product
+### Run from your 180k links CSV
 ```bash
-python scraper.py --run-test
+python scraper.py \
+  --input-csv product_links.csv \
+  --input-column product_link \
+  --out-products-csv data/products_full.csv \
+  --out-ingredients-csv data/ingredients_full.csv \
+  --out-jsonl data/products.jsonl \
+  --delay 2.0 --jitter 3.0 --timeout 45 --retries 6
 ```
 
-### Manual sitemap fallback (recommended when index discovery times out)
-```bash
-python scraper.py --sitemap-url https://incidecoder.com/sitemap-products.0.xml --discover-limit 100
-```
+### Outputs
+- `data/products_full.csv`: one row per product
+- `data/ingredients_full.csv`: flattened ingredient + explained text rows
+- `data/products.jsonl`: full structured product payloads
+- `data/raw_html/*.html`: raw snapshots
 
-### Local sitemap file fallback
-```bash
-python scraper.py --sitemap-file sitemap-products.0.xml --discover-limit 100
-```
-
-### Full index discovery
-```bash
-python scraper.py --discover-incidecoder --discover-limit 100 --delay 1.0 --jitter 2.0 --timeout 30 --retries 4
-```
-
-### Output
-- JSONL: `data/products.jsonl`
-- Raw HTML snapshots: `data/raw_html/*.html`
+### Notes
+- This script is designed for compliant scraping and respects `robots.txt` by default.
+- If a URL is blocked by robots policy, it is skipped and logged.
