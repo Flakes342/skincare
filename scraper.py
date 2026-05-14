@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, csv, hashlib, json, random, time
+import argparse, csv, hashlib, json, random, re, time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -71,9 +71,17 @@ def parse_incidecoder(url:str, html:str)->ProductRecord:
             tds=[txt(td) or '' for td in tr.select('td')]
             if len(tds)>=4: skim.append({headers[0]:tds[0],headers[1]:tds[1],headers[2]:tds[2],headers[3]:tds[3]})
     image = None
-    img = soup.select_one('#product-main-image img, .imgcontainer img, picture img, img[alt]')
-    if img:
-        image = img.get('src') or img.get('data-src')
+    # prefer product-main image area and skip common site/logo assets
+    candidates = soup.select('#product-main-image picture img, #product-main-image img, .imgcontainer picture img, .imgcontainer img')
+    for img in candidates:
+        src = (img.get('src') or img.get('data-src') or '').strip()
+        if not src:
+            continue
+        lower = src.lower()
+        if any(x in lower for x in ['/logo', 'logo.', 'favicon', 'icon', 'sprite']):
+            continue
+        image = src
+        break
 
     explained=[]
     container=soup.select_one('#ingredients-explained, .ingredlist-long')
@@ -107,7 +115,14 @@ def append_ingredient_rows(ingredient_csv: Path, rec: dict):
             w.writerow([rec.get('url'),rec.get('name'),rec.get('brand'),row.get('ingredient',''),'','','',row.get('description','')])
 
 
-def download_product_image(sess: SafeSession, image_url: str, product_url: str, out_dir: Path, obey_robots=True) -> str | None:
+
+def slugify(text: str, max_len: int = 80) -> str:
+    text = (text or 'product').strip().lower()
+    text = re.sub(r'[^a-z0-9]+', '-', text)
+    text = re.sub(r'-+', '-', text).strip('-')
+    return (text or 'product')[:max_len]
+
+def download_product_image(sess: SafeSession, image_url: str, product_url: str, product_name: str, out_dir: Path, obey_robots=True) -> str | None:
     if not image_url:
         return None
     try:
@@ -116,7 +131,9 @@ def download_product_image(sess: SafeSession, image_url: str, product_url: str, 
         p = urlparse(image_url)
         if '.' in Path(p.path).name:
             ext = Path(p.path).suffix or '.jpg'
-        fname = hashlib.sha1((product_url + '::image').encode()).hexdigest()[:16] + ext
+        name_slug = slugify(product_name)
+        h = hashlib.sha1(product_url.encode()).hexdigest()[:8]
+        fname = f"{name_slug}-{h}{ext}"
         path = out_dir / fname
         if not path.exists():
             img_bytes = sess.get(image_url, obey_robots=obey_robots).content
@@ -161,7 +178,7 @@ def main():
                 raw=Path('data/raw_html'); raw.mkdir(parents=True,exist_ok=True)
                 raw_path=raw/f"{hashlib.sha1(url.encode()).hexdigest()[:16]}.html"; raw_path.write_text(html,encoding='utf-8')
                 rec=asdict(parse_incidecoder(url,html)); rec['raw_html_path']=str(raw_path)
-                rec['image_path']=download_product_image(sess, rec.get('image_url'), url, Path(a.image_dir), obey_robots=not a.ignore_robots)
+                rec['image_path']=download_product_image(sess, rec.get('image_url'), url, rec.get('name') or '', Path(a.image_dir), obey_robots=not a.ignore_robots)
                 jf.write(json.dumps(rec,ensure_ascii=False)+'\n')
                 pw.writerow([rec['url'],rec.get('name'),rec.get('brand'),rec.get('image_url'),rec.get('image_path'),rec['raw_html_path']])
                 append_ingredient_rows(ingredients_csv, rec)

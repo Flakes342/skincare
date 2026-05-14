@@ -27,3 +27,6 @@ python scraper.py \
 ### Notes
 - This script is designed for compliant scraping and respects `robots.txt` by default.
 - If a URL is blocked by robots policy, it is skipped and logged.
+
+
+Image files are stored as `<product-name-slug>-<short-hash>.<ext>` for easier S3-style object keying.
