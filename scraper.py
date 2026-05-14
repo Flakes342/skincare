@@ -21,6 +21,7 @@ class ProductRecord:
     ingredients_overview: list[str] | None = None
     skim_table: list[dict[str, str]] | None = None
     ingredients_explained: list[dict[str, str]] | None = None
+    image_url: str | None = None
     extra: dict | None = None
 
 class SafeSession:
@@ -69,6 +70,11 @@ def parse_incidecoder(url:str, html:str)->ProductRecord:
         for tr in table.select('tr'):
             tds=[txt(td) or '' for td in tr.select('td')]
             if len(tds)>=4: skim.append({headers[0]:tds[0],headers[1]:tds[1],headers[2]:tds[2],headers[3]:tds[3]})
+    image = None
+    img = soup.select_one('#product-main-image img, .imgcontainer img, picture img, img[alt]')
+    if img:
+        image = img.get('src') or img.get('data-src')
+
     explained=[]
     container=soup.select_one('#ingredients-explained, .ingredlist-long')
     if container:
@@ -78,7 +84,7 @@ def parse_incidecoder(url:str, html:str)->ProductRecord:
                 if n.name=='p': desc.append(txt(n) or '')
                 n=n.find_next_sibling()
             explained.append({'ingredient':txt(h) or '', 'description':' '.join(desc).strip()})
-    return ProductRecord('incidecoder',url,name,brand,None,skim or None,explained or None,{'title':txt(soup.title)})
+    return ProductRecord('incidecoder',url,name,brand,None,skim or None,explained or None,image,{'title':txt(soup.title)})
 
 def read_urls_from_csv(path: str, column: str) -> list[str]:
     urls=[]
@@ -100,6 +106,26 @@ def append_ingredient_rows(ingredient_csv: Path, rec: dict):
         for row in rec.get('ingredients_explained') or []:
             w.writerow([rec.get('url'),rec.get('name'),rec.get('brand'),row.get('ingredient',''),'','','',row.get('description','')])
 
+
+def download_product_image(sess: SafeSession, image_url: str, product_url: str, out_dir: Path, obey_robots=True) -> str | None:
+    if not image_url:
+        return None
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ext = '.jpg'
+        p = urlparse(image_url)
+        if '.' in Path(p.path).name:
+            ext = Path(p.path).suffix or '.jpg'
+        fname = hashlib.sha1((product_url + '::image').encode()).hexdigest()[:16] + ext
+        path = out_dir / fname
+        if not path.exists():
+            img_bytes = sess.get(image_url, obey_robots=obey_robots).content
+            path.write_bytes(img_bytes)
+        return str(path)
+    except Exception as e:
+        print(f"WARN image download failed for {product_url}: {e}")
+        return None
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--input-csv', default='')
@@ -107,6 +133,7 @@ def main():
     ap.add_argument('--out-jsonl', default='data/products.jsonl')
     ap.add_argument('--out-products-csv', default='data/products_full.csv')
     ap.add_argument('--out-ingredients-csv', default='data/ingredients_full.csv')
+    ap.add_argument('--image-dir', default='data/product_images')
     ap.add_argument('--delay', type=float, default=2.0); ap.add_argument('--jitter', type=float, default=3.0)
     ap.add_argument('--timeout', type=int, default=45); ap.add_argument('--retries', type=int, default=6)
     ap.add_argument('--limit', type=int, default=0); ap.add_argument('--ignore-robots', action='store_true')
@@ -127,15 +154,16 @@ def main():
     new_products=not products_csv.exists()
     with out_jsonl.open('a',encoding='utf-8') as jf, products_csv.open('a', newline='', encoding='utf-8') as pf:
         pw=csv.writer(pf)
-        if new_products: pw.writerow(['url','name','brand','raw_html_path'])
+        if new_products: pw.writerow(['url','name','brand','image_url','image_path','raw_html_path'])
         for i,url in enumerate(urls,start=1):
             try:
                 html=sess.get(url,obey_robots=not a.ignore_robots).text
                 raw=Path('data/raw_html'); raw.mkdir(parents=True,exist_ok=True)
                 raw_path=raw/f"{hashlib.sha1(url.encode()).hexdigest()[:16]}.html"; raw_path.write_text(html,encoding='utf-8')
                 rec=asdict(parse_incidecoder(url,html)); rec['raw_html_path']=str(raw_path)
+                rec['image_path']=download_product_image(sess, rec.get('image_url'), url, Path(a.image_dir), obey_robots=not a.ignore_robots)
                 jf.write(json.dumps(rec,ensure_ascii=False)+'\n')
-                pw.writerow([rec['url'],rec.get('name'),rec.get('brand'),rec['raw_html_path']])
+                pw.writerow([rec['url'],rec.get('name'),rec.get('brand'),rec.get('image_url'),rec.get('image_path'),rec['raw_html_path']])
                 append_ingredient_rows(ingredients_csv, rec)
                 print(f"OK [{i}/{len(urls)}] {rec.get('name') or 'Unknown'} | skim={len(rec.get('skim_table') or [])} | explained={len(rec.get('ingredients_explained') or [])}")
             except PermissionError as e:
