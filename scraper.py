@@ -44,8 +44,12 @@ class SafeSession:
 
     def get(self, url:str, obey_robots=True):
         p=urlparse(url); base=f"{p.scheme}://{p.netloc}"
-        if obey_robots and not self._rp(base).can_fetch(USER_AGENT,url):
-            raise PermissionError(f"Blocked by robots.txt: {url}")
+        if obey_robots:
+            rp = self._rp(base)
+            allowed_for_bot = rp.can_fetch(USER_AGENT, url)
+            allowed_for_generic = rp.can_fetch('*', url)
+            if not (allowed_for_bot or allowed_for_generic):
+                raise PermissionError(f"Blocked by robots.txt: {url}")
 
         last_err = None
         for attempt in range(1, self.max_retries + 1):
@@ -67,13 +71,36 @@ def parse_sitemap_xml(xml_text: str) -> list[str]:
     return [n.text.strip() for n in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc') if n.text]
 
 def discover_incidecoder_product_urls(sess: SafeSession, obey_robots=True) -> list[str]:
-    index = sess.get('https://incidecoder.com/sitemap-index.xml', obey_robots=obey_robots).text
-    nested = parse_sitemap_xml(index)
+    sitemap_indexes = [
+        'https://incidecoder.com/sitemap-index.xml',
+        'https://www.incidecoder.com/sitemap-index.xml',
+    ]
+    last_err = None
+    nested = []
+    for idx_url in sitemap_indexes:
+        try:
+            index = sess.get(idx_url, obey_robots=obey_robots).text
+            nested = parse_sitemap_xml(index)
+            if nested:
+                print(f"OK sitemap index: {idx_url} ({len(nested)} child sitemaps)")
+                break
+        except Exception as e:
+            last_err = e
+            print(f"WARN failed sitemap index {idx_url}: {e}")
+    if not nested:
+        if last_err:
+            raise last_err
+        return []
+
     product_maps = [u for u in nested if '/sitemaps/products-' in u or 'products' in u]
     out=[]
     for sm in product_maps:
-        xml=sess.get(sm, obey_robots=obey_robots).text
-        out.extend([u for u in parse_sitemap_xml(xml) if '/products/' in u])
+        try:
+            xml=sess.get(sm, obey_robots=obey_robots).text
+            out.extend([u for u in parse_sitemap_xml(xml) if '/products/' in u])
+        except Exception as e:
+            print(f"WARN skipping sitemap due to repeated failures: {sm} -> {e}")
+            continue
     return sorted(set(out))
 
 def _txt(n): return n.get_text(' ', strip=True) if n else None
@@ -140,7 +167,16 @@ def main():
 
     urls=list(a.urls)
     if a.discover_incidecoder:
-        urls.extend(discover_incidecoder_product_urls(sess, obey_robots=not a.ignore_robots))
+        try:
+            urls.extend(discover_incidecoder_product_urls(sess, obey_robots=not a.ignore_robots))
+        except PermissionError as e:
+            print(f"ERR discovery blocked by robots policy: {e}")
+            print("TIP: pass explicit product URLs, or run with --ignore-robots only if you have permission.")
+            return
+        except requests.RequestException as e:
+            print(f"ERR discovery failed after retries due to network timeout/error: {e}")
+            print("TIP: try --timeout 60 --retries 8, or provide explicit product URLs in this run.")
+            return
     urls=sorted(set(urls))
     if a.discover_limit>0: urls=urls[:a.discover_limit]
     out=Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
