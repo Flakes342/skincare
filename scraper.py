@@ -70,6 +70,19 @@ def parse_sitemap_xml(xml_text: str) -> list[str]:
     root = ET.fromstring(xml_text)
     return [n.text.strip() for n in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc') if n.text]
 
+
+
+def discover_from_sitemap_urls(sess: SafeSession, sitemap_urls: list[str], obey_robots=True) -> list[str]:
+    out=[]
+    for sm in sitemap_urls:
+        try:
+            xml=sess.get(sm, obey_robots=obey_robots).text
+            out.extend([u for u in parse_sitemap_xml(xml) if '/products/' in u])
+            print(f"OK manual sitemap: {sm}")
+        except Exception as e:
+            print(f"WARN failed manual sitemap {sm}: {e}")
+    return sorted(set(out))
+
 def discover_incidecoder_product_urls(sess: SafeSession, obey_robots=True) -> list[str]:
     sitemap_indexes = [
         'https://incidecoder.com/sitemap-index.xml',
@@ -150,6 +163,8 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('urls', nargs='*')
     ap.add_argument('--discover-incidecoder', action='store_true')
+    ap.add_argument('--sitemap-url', action='append', default=[], help='Manual sitemap URL(s), e.g. https://incidecoder.com/sitemap-products.0.xml')
+    ap.add_argument('--sitemap-file', default='', help='Path to local sitemap XML file to extract product links from')
     ap.add_argument('--discover-limit', type=int, default=0)
     ap.add_argument('--test-url', default='https://incidecoder.com/products/niod-non-acid-acid-precursor-15')
     ap.add_argument('--run-test', action='store_true', help='Scrape only test URL and print parsed JSON preview')
@@ -175,6 +190,19 @@ def main():
         return
 
     urls=list(a.urls)
+
+    if a.sitemap_file:
+        try:
+            xml_text = Path(a.sitemap_file).read_text(encoding='utf-8')
+            urls.extend([u for u in parse_sitemap_xml(xml_text) if '/products/' in u])
+            print(f"OK loaded links from local sitemap file: {a.sitemap_file}")
+        except Exception as e:
+            print(f"ERR failed to read local sitemap file: {e}")
+            return
+
+    if a.sitemap_url:
+        urls.extend(discover_from_sitemap_urls(sess, a.sitemap_url, obey_robots=not a.ignore_robots))
+
     if a.discover_incidecoder:
         try:
             urls.extend(discover_incidecoder_product_urls(sess, obey_robots=not a.ignore_robots))
@@ -184,7 +212,7 @@ def main():
             return
         except requests.RequestException as e:
             print(f"ERR discovery failed after retries due to network timeout/error: {e}")
-            print("TIP: try --timeout 60 --retries 8, or provide explicit product URLs in this run.")
+            print("TIP: use --sitemap-url https://incidecoder.com/sitemap-products.0.xml or local --sitemap-file as a manual fallback.")
             return
     urls=sorted(set(urls))
     if a.discover_limit>0: urls=urls[:a.discover_limit]

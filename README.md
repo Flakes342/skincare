@@ -5,22 +5,25 @@
 pip install -r requirements.txt
 ```
 
-### Test one product (preview parsed JSON)
+### Test one product
 ```bash
 python scraper.py --run-test
 ```
 
-### Discover + scrape with random delay/jitter and retries
+### Manual sitemap fallback (recommended when index discovery times out)
+```bash
+python scraper.py --sitemap-url https://incidecoder.com/sitemap-products.0.xml --discover-limit 100
+```
+
+### Local sitemap file fallback
+```bash
+python scraper.py --sitemap-file sitemap-products.0.xml --discover-limit 100
+```
+
+### Full index discovery
 ```bash
 python scraper.py --discover-incidecoder --discover-limit 100 --delay 1.0 --jitter 2.0 --timeout 30 --retries 4
 ```
-
-### Logging
-Each scraped product logs progress and key counts:
-- product name
-- brand
-- number of overview ingredients
-- number of ingredients explained entries
 
 ### Output
 - JSONL: `data/products.jsonl`
