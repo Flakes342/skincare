@@ -137,6 +137,8 @@ def main():
     ap.add_argument('--out-products-csv', default='data/products_full.csv')
     ap.add_argument('--out-ingredients-csv', default='data/ingredients_full.csv')
     ap.add_argument('--image-dir', default='data/product_images')
+    ap.add_argument('--download-images', action='store_true', default=True, help='Download product images')
+    ap.add_argument('--no-download-images', action='store_false', dest='download_images', help='Skip image downloads')
     ap.add_argument('--blocked-log-csv', default='data/blocked_by_robots.csv')
     ap.add_argument('--workers', type=int, default=8)
     ap.add_argument('--delay', type=float, default=0.4); ap.add_argument('--jitter', type=float, default=0.6)
@@ -167,7 +169,9 @@ def main():
         html=sess.get(url,obey_robots=not a.ignore_robots).text
         raw_path=raw_dir/f"{hashlib.sha1(url.encode()).hexdigest()[:16]}.html"; raw_path.write_text(html,encoding='utf-8')
         rec=asdict(parse_incidecoder(url,html)); rec['raw_html_path']=str(raw_path)
-        rec['image_path']=download_product_image(sess,rec.get('image_url'),url,rec.get('name') or '',Path(a.image_dir),obey_robots=not a.ignore_robots)
+        rec['image_path']=None
+        if a.download_images:
+            rec['image_path']=download_product_image(sess,rec.get('image_url'),url,rec.get('name') or '',Path(a.image_dir),obey_robots=not a.ignore_robots)
         return rec
 
     with ThreadPoolExecutor(max_workers=max(1,a.workers)) as ex:

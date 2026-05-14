@@ -15,7 +15,8 @@ python scraper.py \
   --out-products-csv data/products_full.csv \
   --out-ingredients-csv data/ingredients_full.csv \
   --out-jsonl data/products.jsonl \
-  --image-dir data/product_images
+  --image-dir data/product_images \
+  --no-download-images   # use this for faster metadata-only pass
 ```
 
 ### Outputs
@@ -27,3 +28,6 @@ python scraper.py \
 - `data/blocked_by_robots.csv`
 
 Image files are named `<product-name-slug>-<short-hash>.<ext>`.
+
+
+Use `--no-download-images` to skip image downloads, and later rerun with image downloads enabled for shortlisted URLs.
