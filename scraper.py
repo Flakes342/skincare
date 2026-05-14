@@ -160,7 +160,16 @@ def main():
     a=ap.parse_args(); sess=SafeSession(a.delay, a.jitter, a.timeout, a.retries)
 
     if a.run_test:
-        html=sess.get(a.test_url, obey_robots=not a.ignore_robots).text
+        try:
+            html=sess.get(a.test_url, obey_robots=not a.ignore_robots).text
+        except PermissionError as e:
+            print(f"ERR run-test blocked by robots policy: {e}")
+            print("TIP: rerun with --run-test --ignore-robots only if you have permission to do so.")
+            return
+        except requests.RequestException as e:
+            print(f"ERR run-test failed due to network timeout/error: {e}")
+            print("TIP: try --timeout 60 --retries 8 and rerun.")
+            return
         rec=asdict(parse_incidecoder(a.test_url, html))
         print(json.dumps(rec, ensure_ascii=False, indent=2)[:8000])
         return
